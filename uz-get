@@ -1,0 +1,228 @@
+#!/usr/bin/perl
+
+use lib qw(/home/rork/Scripts/lib);
+use LWP::Simple;
+use File::Copy;
+use Getopt::Long;
+use HTML::LinkExtor;
+use uIni;
+use strict;
+use warnings;
+
+# CHANGELOG
+# v0.1
+#   - basic script
+#
+# TODO
+#   - clean filelist before updating
+#   - check for http errors
+#   - support local repositories
+#   - update single repositories
+#   - build in load balancer
+#   - build repository management, opening a 4MB file might not be easy
+#   - add an upgrade function?
+
+# set some variables
+my $utdir = "/media/rork/Meuk/Software/UT/Game_Files/";
+my $cachedir = $utdir . "Cache/";
+my $pathToUcc = "/home/rork/Games/ut/ucc";
+my $pathToUtdep = "perl -w /home/rork/Scripts/ut/utdep.pl";
+
+# fixed variables
+my $version = '0.1';
+my %type2dir = (
+  "u" => "System/",
+  "unr" => "Maps/",
+  "umx" => "Music/",
+  "utx" => "Textures/",
+  "uax" => "Sounds/");
+
+GetOptions("d|download=s" => \&download, "h|help" => \&help, "r|repair=s" => \&repair, "u|update" => \&update, "s|search=s" => \&search, "i|install=s" => \&install);
+
+sub download {
+  # the most important part of the script, downloads, decompresses and moves the file.
+  my $self = shift;
+  my $file = shift;
+  my $filename = $file;
+     $filename =~ s/^.*\///;
+
+  # get the filetype
+     $filename =~ m/\.(u[mxnrat]*)\.uz/i;
+  my $type = lc($1);
+
+  # create the cachename and the packagename
+  my $storename = $cachedir . $filename;
+     $filename =~ s/\.uz$//i;
+  my $packagename = $utdir . $type2dir{$type} . $filename;
+
+  if (-e $packagename) {
+    print "Package $filename allready exists\n";
+    exit;
+  }
+
+  # download and store the file
+  print "Downloading $file\n";
+
+  unless (-e $storename) {
+    getstore($file, $storename);
+  }
+
+  print "Decompress $filename\n";
+  $storename =~ s/\(/\\\(/g;
+  $storename =~ s/\)/\\\)/g;
+  system($pathToUcc . " decompress " . $storename);
+  print "Move to " . $packagename . "\n";
+  move($ENV{'HOME'} . "/.loki/ut/System/" . $filename ,$packagename) or die "Can't move package (" . $ENV{'HOME'} . "/.loki/ut/System/" . $filename . ": $!";
+}
+
+sub install {
+  my $self = shift;
+  my $query = shift;
+
+  # first find available url's
+  my @urls;
+
+  open(FILE, "<", $utdir . "/System/uz-get.ini") or die "Can't open FILE: $!";
+  while(<FILE>) {
+    if ($_ =~ m/file.*\/$query\.uz/i) {
+      s/[\r\n]//g;
+      s/file\[\d+\]=//i;
+      push(@urls, $_);
+    }
+  }
+  close(FILE);
+  if ($#urls == -1) {
+    print "File ($query) not found\n";
+    return;
+  }
+
+  # choose a random url, should build a decent loadbalancer
+  my $rand = srand($#urls);
+  # print "Get url $rand\n";
+
+  # download file and dependencies
+  download(undef, $urls[$rand-1]);
+  repair(undef, $query);
+}
+
+sub help {
+  print <<HelpText;
+uz-get v$version
+search and download ut files from redirectservers
+
+Usage: uz-get -dhirsu ?file?
+
+Options:
+   -d   --download URL      Downloads and install a networkpackage
+   -h   --help              This help text
+   -i   --install  PACKAGE  Searches and downloads a package
+   -r   --repair   PACKAGE  Checks for and installs missing dependencies
+   -s   --search   PACKAGE  Search for the package in the repository
+   -u   --update            Update the filelist
+
+HelpText
+}
+
+sub search {
+  my $self = shift;
+  my $query = shift;
+  my %results;
+
+  open(FILE, "<", $utdir . "/System/uz-get.ini") or die "Can't open FILE uz-get.ini: $!";
+  while(<FILE>) {
+    if ($_ =~ m/\/[^\/]*$query[^\/]*$/i) {
+      $_ =~ s/[\r\n]//g;
+      $_ =~ s/.*\///;
+      $_ =~ s/\.uz$//i;
+      $results{lc($_)}++;
+    }
+  }
+  close(FILE);
+
+  print join("\n", sort keys %results);
+  print "\n\n";
+}
+
+sub repair {
+  my $self = shift;
+  my $pkg = shift;
+
+
+  $pkg =~ s/\(/\\\(/g;
+  $pkg =~ s/\)/\\\)/g;
+
+  # get the filetype
+     $pkg =~ m/\.(u[mxnrat]*)/i;
+  my $type = lc($1);
+
+  # check if the file exists
+  my $pkgPath = $utdir . $type2dir{$type} . $pkg;
+  unless (-e $pkgPath) {
+    print "Can't repair $pkg: file not found\n";
+    return;
+  }
+
+  # get the dependencies
+  my $command = $pathToUtdep . " " . $pkgPath;
+  my @deps = `$command`;
+  chomp(@deps);
+
+  my %installed;
+  # check if the dependencies exist, if not install them, must be case insensitive so get a list of files
+  foreach my $subdir(values %type2dir) {
+    opendir(DIR, $utdir . $subdir) or die "Can't read DIR: $!";
+    map($installed{lc($_)} = "", readdir(DIR));
+    closedir(DIR);
+
+    if (-e $ENV{'HOME'} . "/.loki/ut/" . $subdir) {
+      opendir(DIR, $ENV{'HOME'} . "/.loki/ut/" . $subdir) or die "Can't read DIR: $!";
+      map($installed{lc($_)} = "", readdir(DIR));
+      closedir(DIR);
+    }
+
+    if (-e $ENV{'HOME'} . "/Games/ut/") {
+      opendir(DIR, $ENV{'HOME'} . "/Games/ut/" . $subdir) or die "Can't read DIR: $!";
+      map($installed{lc($_)} = "", readdir(DIR));
+      closedir(DIR);
+    }
+  }
+
+  foreach my $dep(@deps) {
+    next unless ($dep =~ m/\.(u[mxnrat]*)/i);
+    if (!exists($installed{lc($dep)})) {
+      install(undef, $dep);
+    }
+  }
+}
+
+sub update {
+  my $ini = uIni->new();
+     $ini->load($utdir . "System/uz-get.ini");
+  my $i = 0;
+  my $numFiles = 0;
+  while(1) {
+    my @files;
+    my $repository = $ini->getValue("uz-get.files", "Repository", $i);
+    unless (defined($repository)) {
+      last;
+    }
+    print "Get $repository\n";
+    # fetch the page 
+    my $page = get($repository);
+    my $parser = new HTML::LinkExtor (sub {my ($tag, %links) = @_; push(@files, values(%links))});
+       $parser->parse ($page);
+       $parser->eof;
+    foreach my $file(@files) {
+      next unless ($file =~ m/.uz$/i);
+      if ($file !~ m/^http/i) {
+        $file =~ s/^\///;
+        $file = $repository . $file;
+      }
+      # print "Found: $file\n";
+      $ini->setValue("uz-get.files", "file", $numFiles, $file);
+      $numFiles++;
+    }
+    $i++;
+  }
+  $ini->save($utdir . "System/uz-get.ini");
+}
