@@ -34,7 +34,7 @@ my $pathToUcc = "/home/rork/Games/ut/ucc";
 my $pathToLog = "/home/rork/.loki/ut/System/UnrealTournament.log";
 
 # fixed variables
-my $version = '0.1';
+my $version = '0.2';
 my %type2dir = (
   "u" => "System/",
   "unr" => "Maps/",
@@ -126,7 +126,7 @@ sub help {
 uz-get v$version
 search and download ut files from redirectservers
 
-Usage: uz-get -dhirsu ?file?
+Usage: uz-get -dhirsuf ?file?
 
 Options:
    -d   --download URL      Downloads and install a networkpackage
