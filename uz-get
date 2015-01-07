@@ -135,6 +135,7 @@ Options:
    -r   --repair   PACKAGE  Checks for and installs missing dependencies
    -s   --search   PACKAGE  Search for the package in the repository
    -u   --update            Update the filelist
+   -f   --fix-mismatch      Check the UnrealTournament.log for version mismatches and missing files
 
 HelpText
 }
