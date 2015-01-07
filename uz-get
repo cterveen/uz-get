@@ -202,7 +202,6 @@ sub update {
   my $new_ini = uIni->new();
   my $i = 0;
   my $numFiles = 0;
-  my $before = time;
   while(1) {
     my @files;
     my $repository = $ini->getValue("uz-get.files", "Repository", $i);
@@ -229,6 +228,4 @@ sub update {
     $i++;
   }
   $new_ini->save($utdir . "System/uz-get.ini");
-  my $after = time;
-  print "Took " . ($after - $before) . " seconds\n";
 }
