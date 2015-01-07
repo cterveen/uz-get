@@ -12,7 +12,8 @@ use warnings;
 # CHANGELOG
 # v0.1
 #   - basic script
-#
+# v0.1.1
+#   - Overwrite the ini on update (requires latest uIni.pm)
 # TODO
 #   - clean filelist before updating
 #   - check for http errors
@@ -198,11 +199,14 @@ sub repair {
 sub update {
   my $ini = uIni->new();
      $ini->load($utdir . "System/uz-get.ini");
+  my $new_ini = uIni->new();
   my $i = 0;
   my $numFiles = 0;
+  my $before = time;
   while(1) {
     my @files;
     my $repository = $ini->getValue("uz-get.files", "Repository", $i);
+    $new_ini->setValue("uz-get.files", "Repository", $i, $repository);
     unless (defined($repository)) {
       last;
     }
@@ -219,10 +223,12 @@ sub update {
         $file = $repository . $file;
       }
       # print "Found: $file\n";
-      $ini->setValue("uz-get.files", "file", $numFiles, $file);
+      $new_ini->setValue("uz-get.files", "file", $numFiles, $file);
       $numFiles++;
     }
     $i++;
   }
-  $ini->save($utdir . "System/uz-get.ini");
+  $new_ini->save($utdir . "System/uz-get.ini");
+  my $after = time;
+  print "Took " . ($after - $before) . " seconds\n";
 }
