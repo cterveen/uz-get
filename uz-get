@@ -6,16 +6,19 @@ use File::Copy;
 use Getopt::Long;
 use HTML::LinkExtor;
 use uIni;
+use upkg;
 use strict;
 use warnings;
 
 # CHANGELOG
 # v0.1
 #   - basic script
-# v0.1.1
+# v0.1.2
 #   - Overwrite the ini on update (requires latest uIni.pm)
+#   - Replace utdep.pl by upkg.pm
+#   - Case insensitive search on repair
+#
 # TODO
-#   - clean filelist before updating
 #   - check for http errors
 #   - support local repositories
 #   - update single repositories
@@ -27,7 +30,6 @@ use warnings;
 my $utdir = "/media/rork/Meuk/Software/UT/Game_Files/";
 my $cachedir = $utdir . "Cache/";
 my $pathToUcc = "/home/rork/Games/ut/ucc";
-my $pathToUtdep = "perl -w /home/rork/Scripts/ut/utdep.pl";
 
 # fixed variables
 my $version = '0.1';
@@ -159,14 +161,26 @@ sub repair {
   # check if the file exists
   my $pkgPath = $utdir . $type2dir{$type} . $pkg;
   unless (-e $pkgPath) {
-    print "Can't repair $pkg: file not found\n";
-    return;
+    print "Case-insensitive search\n";
+    opendir(DIR, $utdir . $type2dir{$type});
+    foreach (readdir(DIR)) {
+      if (lc($_) eq lc($pkg)) {
+        $pkgPath = $utdir . $type2dir{$type} . $_;
+      }
+    }
+    
+    #check again
+    unless (-e $pkgPath) {
+      print "Can't repair $pkg: file not found\n";
+      return;
+    }
   }
 
   # get the dependencies
-  my $command = $pathToUtdep . " " . $pkgPath;
-  my @deps = `$command`;
-  chomp(@deps);
+  my $opkg = upkg->new();
+     $opkg->load($pkgPath);
+     
+  my @deps = $opkg->getDependencies();
 
   my %installed;
   # check if the dependencies exist, if not install them, must be case insensitive so get a list of files
