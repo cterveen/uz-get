@@ -13,10 +13,11 @@ use warnings;
 # CHANGELOG
 # v0.1
 #   - basic script
-# v0.1.2
+# v0.2
 #   - Overwrite the ini on update (requires latest uIni.pm)
 #   - Replace utdep.pl by upkg.pm
 #   - Case insensitive search on repair
+#   - Add --fix-mismatch
 #
 # TODO
 #   - check for http errors
@@ -27,9 +28,10 @@ use warnings;
 #   - add an upgrade function?
 
 # set some variables
-my $utdir = "/media/rork/Meuk/Software/UT/Game_Files/";
+my $utdir = "/home/rork/tmp/UT/";
 my $cachedir = $utdir . "Cache/";
 my $pathToUcc = "/home/rork/Games/ut/ucc";
+my $pathToLog = "/home/rork/.loki/ut/System/UnrealTournament.log";
 
 # fixed variables
 my $version = '0.1';
@@ -40,7 +42,7 @@ my %type2dir = (
   "utx" => "Textures/",
   "uax" => "Sounds/");
 
-GetOptions("d|download=s" => \&download, "h|help" => \&help, "r|repair=s" => \&repair, "u|update" => \&update, "s|search=s" => \&search, "i|install=s" => \&install);
+GetOptions("d|download=s" => \&download, "h|help" => \&help, "r|repair=s" => \&repair, "u|update" => \&update, "s|search=s" => \&search, "i|install=s" => \&install, "f|fix-mismatch" => \&fixMismatch);
 
 sub download {
   # the most important part of the script, downloads, decompresses and moves the file.
@@ -69,11 +71,22 @@ sub download {
   unless (-e $storename) {
     getstore($file, $storename);
   }
-
-  print "Decompress $filename\n";
-  $storename =~ s/\(/\\\(/g;
-  $storename =~ s/\)/\\\)/g;
-  system($pathToUcc . " decompress " . $storename);
+  
+  if ($storename =~ m/\.uz$/) {
+    print "Decompress $filename\n";
+    $storename =~ s/\(/\\\(/g;
+    $storename =~ s/\)/\\\)/g;
+    system($pathToUcc . " decompress " . $storename);
+  }
+  
+  unless (-e $ENV{'HOME'} . "/.loki/ut/System/" . $filename) {
+    opendir(DIR, $ENV{'HOME'} . "/.loki/ut/System/");
+    foreach (readdir(DIR)) {
+      if (lc($_) eq lc($file)) {
+        $filename = $_;
+      }
+    }
+  }
   print "Move to " . $packagename . "\n";
   move($ENV{'HOME'} . "/.loki/ut/System/" . $filename ,$packagename) or die "Can't move package (" . $ENV{'HOME'} . "/.loki/ut/System/" . $filename . ": $!";
 }
@@ -242,4 +255,126 @@ sub update {
     $i++;
   }
   $new_ini->save($utdir . "System/uz-get.ini");
+}
+
+sub fixMismatch {
+  my %files;
+  my $redirect;
+  my $compression = 0;
+  
+  open(LOG, "<", $pathToLog) or die "Can't open log ($pathToLog): $!\n";
+  while(<LOG>) {
+    chomp;
+    my @line = split(/\s+/);
+    
+    # detect new connection:
+    # Log: Browse: 176.57.143.206/Index.unr?Name=Rork?Class=BotPack.TMale1?team=0?skin=CommandoSkins.daco?Face=CommandoSkins.Boris?Voice=BotPack.VoiceMaleOne?OverrideClass=
+    if ($line[0] eq "Log:" and $line[1] eq "Browse:") {
+      # reconnect, reset the files
+      print "Switch map\n";
+      %files = ();
+    }
+    
+    # detect packages
+    # DevNet: PendingLevel received: USES GUID=B9D3048E4988166ADE95A99FF86E339E PKG=MH-ATAA0-(Obnoxious)+fix2 FLAGS=1 SIZE=1001070 GEN=1 FNAME=MH-ATAA0-(Obnoxious)+fix2.unr
+    if ($line[0] eq "DevNet:" and $line[1] eq "PendingLevel" and $line[3] eq "USES") {
+      my $guid = substr($line[4], 5);
+      my $file = substr($line[9], 6);
+      $files{$file} = $guid;
+    }
+    
+    # detect redirect
+    # DevNet: PendingLevel received: DLMGR CLASS=IpDrv.HTTPDownload PARAMS=http://176.57.143.206/redirect/ COMPRESSION=1
+    if ($line[0] eq "DevNet:" and $line[1] eq "PendingLevel" and $line[3] eq "DLMGR" and $line[4] eq "CLASS=IpDrv.HTTPDownload") {
+      $redirect = substr($line[5], 7);
+      $compression = substr($line[6], -1);
+    }
+  }
+  close(LOG);
+  
+  if (!defined($redirect)) {
+    print "No redirect found, can't do anything\n";
+    exit;
+  }
+  
+  if ($redirect !~ m/\/$/) {
+    $redirect .= "/";
+  }
+  print "Redirect: $redirect\n";
+  print "Compression: $compression\n";
+  print "Files: " . (scalar(keys  %files) + 1) . "\n\n";
+  
+  foreach my $file (sort {lc($a) cmp lc($b)} keys %files) {
+    print $file;
+    
+    
+    my $guid = $files{$file};
+
+    my $path = getPath($file);
+    my $link = $redirect . $file;
+    if ($compression) {
+      $link .= ".uz";
+    }
+    if (!defined($path)) {
+      print " [DOWNLOAD]\n";
+
+      download(undef, $link);
+    }
+    else {
+      my $pkg = upkg->new;
+         $pkg->load($path);
+         
+      my $curguid = $pkg->{'headers'}->{'GUID'};
+      my $version = $pkg->{'headers'}->{'Version'};
+      
+      if ($version < 68) {
+        print " [NO GUID]\n";
+      }
+      else {
+        $curguid =~ s/-//g;
+        $curguid = uc($curguid);
+                
+        if ($guid eq $curguid) {
+          print " [OK]\n";
+        }
+        else {
+          print " [REPLACE]\n";
+          unlink($path);
+          
+          print "old: " . $curguid . "\n";
+          print "new: " . $guid . "\n";
+          
+          my $link = $redirect . $file;
+          if ($compression) {
+            $link .= ".uz";
+          }
+          download(undef, $link);
+        }
+      }
+    }
+  }
+}
+
+sub getPath {
+  my $file = shift;
+  
+  # get the filetype
+     $file =~ m/\.(u[mxnrat]*)/i;
+  my $type = lc($1);
+  
+  my $pkgPath = $utdir . $type2dir{$type} . $file;
+  unless (-e $pkgPath) {
+    opendir(DIR, $utdir . $type2dir{$type});
+    foreach (readdir(DIR)) {
+      if (lc($_) eq lc($file)) {
+        $pkgPath = $utdir . $type2dir{$type} . $_;
+      }
+    }
+    
+    #check again
+    unless (-e $pkgPath) {
+      return;
+    }
+  }
+  return $pkgPath;
 }
