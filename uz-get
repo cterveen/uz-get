@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-use lib qw(/home/rork/Scripts/lib);
+# use lib qw(/home/rork/Scripts/lib);
 use LWP::Simple;
 use File::Copy;
 use Getopt::Long;
@@ -18,6 +18,8 @@ use warnings;
 #   - Replace utdep.pl by upkg.pm
 #   - Case insensitive search on repair
 #   - Add --fix-mismatch
+# v0.3.1
+#   - Fixed case in downloading files
 #
 # TODO
 #   - check for http errors
@@ -34,7 +36,7 @@ my $pathToUcc = "/home/rork/Games/ut/ucc";
 my $pathToLog = "/home/rork/.loki/ut/System/UnrealTournament.log";
 
 # fixed variables
-my $version = '0.2';
+my $version = '0.1';
 my %type2dir = (
   "u" => "System/",
   "unr" => "Maps/",
@@ -58,9 +60,9 @@ sub download {
   # create the cachename and the packagename
   my $storename = $cachedir . $filename;
      $filename =~ s/\.uz$//i;
-  my $packagename = $utdir . $type2dir{$type} . $filename;
-
-  if (-e $packagename) {
+  my $packagename = getPath($filename);
+  
+  if (defined($packagename)) {
     print "Package $filename allready exists\n";
     exit;
   }
@@ -82,11 +84,14 @@ sub download {
   unless (-e $ENV{'HOME'} . "/.loki/ut/System/" . $filename) {
     opendir(DIR, $ENV{'HOME'} . "/.loki/ut/System/");
     foreach (readdir(DIR)) {
-      if (lc($_) eq lc($file)) {
+      if (lc($_) eq lc($filename)) {
         $filename = $_;
       }
     }
   }
+  
+  $packagename = makePath($filename);
+  
   print "Move to " . $packagename . "\n";
   move($ENV{'HOME'} . "/.loki/ut/System/" . $filename ,$packagename) or die "Can't move package (" . $ENV{'HOME'} . "/.loki/ut/System/" . $filename . ": $!";
 }
@@ -126,7 +131,7 @@ sub help {
 uz-get v$version
 search and download ut files from redirectservers
 
-Usage: uz-get -dhirsuf ?file?
+Usage: uz-get -dhirsu ?file?
 
 Options:
    -d   --download URL      Downloads and install a networkpackage
@@ -364,6 +369,8 @@ sub getPath {
   my $type = lc($1);
   
   my $pkgPath = $utdir . $type2dir{$type} . $file;
+  
+  
   unless (-e $pkgPath) {
     opendir(DIR, $utdir . $type2dir{$type});
     foreach (readdir(DIR)) {
@@ -377,5 +384,15 @@ sub getPath {
       return;
     }
   }
+  return $pkgPath;
+}
+
+sub makePath {
+  my $file = shift;
+     $file =~ m/\.(u[mxnrat]*)/i;
+  my $type = lc($1);
+  
+  my $pkgPath = $utdir . $type2dir{$type} . $file;
+  
   return $pkgPath;
 }
