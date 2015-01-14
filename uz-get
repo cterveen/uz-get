@@ -3,6 +3,7 @@
 # use lib qw(/home/rork/Scripts/lib);
 use LWP::Simple;
 use File::Copy;
+use File::Basename;
 use Getopt::Long;
 use HTML::LinkExtor;
 use uIni;
@@ -18,31 +19,32 @@ use warnings;
 #   - Replace utdep.pl by upkg.pm
 #   - Case insensitive search on repair
 #   - Add --fix-mismatch
-# v0.3.1
+# v0.4
 #   - Fixed case in downloading files
+#   - Fixes in getPath()
+#   - Improve case insensitive file searching
+#   - Easier version of repair (only searches the indicated directory now)
+#   - Fixed bug in saving uz-get.new_ini
+#   - Added multiple direction support
+#   - Changed behaviour of makePath (returns path within utdir)
+#   - Backup mismatched files and restore if available
 #
 # TODO
 #   - check for http errors
-#   - support local repositories
 #   - update single repositories
-#   - build in load balancer
-#   - build repository management, opening a 4MB file might not be easy
 #   - add an upgrade function?
+#   - incorperate udecache
 
 # set some variables
-my $utdir = "/home/rork/tmp/UT/";
-my $cachedir = $utdir . "Cache/";
+
+# first dir is where the all the files are stored, this must contain the System/uz-get.ini and must be where ucc stores its files.
+my @utdirs = ("/home/rork/.loki/ut/", "/home/rork/Games/ut/");
 my $pathToUcc = "/home/rork/Games/ut/ucc";
 my $pathToLog = "/home/rork/.loki/ut/System/UnrealTournament.log";
 
 # fixed variables
-my $version = '0.1';
-my %type2dir = (
-  "u" => "System/",
-  "unr" => "Maps/",
-  "umx" => "Music/",
-  "utx" => "Textures/",
-  "uax" => "Sounds/");
+my $version = '0.4';
+
 
 GetOptions("d|download=s" => \&download, "h|help" => \&help, "r|repair=s" => \&repair, "u|update" => \&update, "s|search=s" => \&search, "i|install=s" => \&install, "f|fix-mismatch" => \&fixMismatch);
 
@@ -53,29 +55,29 @@ sub download {
   my $filename = $file;
      $filename =~ s/^.*\///;
 
-  # get the filetype
-     $filename =~ m/\.(u[mxnrat]*)\.uz/i;
-  my $type = lc($1);
-
   # create the cachename and the packagename
-  my $storename = $cachedir . $filename;
+  my $storename = $utdirs[0] . makePath($filename);
      $filename =~ s/\.uz$//i;
+     
   my $packagename = getPath($filename);
-  
+    
   if (defined($packagename)) {
     print "Package $filename allready exists\n";
-    exit;
+    return;
   }
 
   # download and store the file
-  print "Downloading $file\n";
 
   unless (-e $storename) {
+    print "Downloading $file\n";
     getstore($file, $storename);
+  }
+  else {
+    print "Get $filename from Cache\n";
   }
   
   if ($storename =~ m/\.uz$/) {
-    print "Decompress $filename\n";
+    print "Decompress $storename\n";
     $storename =~ s/\(/\\\(/g;
     $storename =~ s/\)/\\\)/g;
     system($pathToUcc . " decompress " . $storename);
@@ -90,10 +92,10 @@ sub download {
     }
   }
   
-  $packagename = makePath($filename);
+  $packagename = $utdirs[0] . makePath($filename);
   
   print "Move to " . $packagename . "\n";
-  move($ENV{'HOME'} . "/.loki/ut/System/" . $filename ,$packagename) or die "Can't move package (" . $ENV{'HOME'} . "/.loki/ut/System/" . $filename . ": $!";
+  move($utdirs[0] . "/System/" . $filename ,$packagename) or die "Can't move package (" . $utdirs[0] . "/.loki/ut/System/" . $filename . ": $!";
 }
 
 sub install {
@@ -103,7 +105,7 @@ sub install {
   # first find available url's
   my @urls;
 
-  open(FILE, "<", $utdir . "/System/uz-get.ini") or die "Can't open FILE: $!";
+  open(FILE, "<", $utdirs[0] . "/System/uz-get.ini") or die "Can't open FILE: $!";
   while(<FILE>) {
     if ($_ =~ m/file.*\/$query\.uz/i) {
       s/[\r\n]//g;
@@ -131,7 +133,7 @@ sub help {
 uz-get v$version
 search and download ut files from redirectservers
 
-Usage: uz-get -dhirsu ?file?
+Usage: uz-get -dhirsuf ?file?
 
 Options:
    -d   --download URL      Downloads and install a networkpackage
@@ -150,7 +152,7 @@ sub search {
   my $query = shift;
   my %results;
 
-  open(FILE, "<", $utdir . "/System/uz-get.ini") or die "Can't open FILE uz-get.ini: $!";
+  open(FILE, "<", $utdirs[0] . "/System/uz-get.ini") or die "Can't open FILE uz-get.ini: $!";
   while(<FILE>) {
     if ($_ =~ m/\/[^\/]*$query[^\/]*$/i) {
       $_ =~ s/[\r\n]//g;
@@ -178,21 +180,10 @@ sub repair {
   my $type = lc($1);
 
   # check if the file exists
-  my $pkgPath = $utdir . $type2dir{$type} . $pkg;
+  my $pkgPath = getPath($pkg);
   unless (-e $pkgPath) {
-    print "Case-insensitive search\n";
-    opendir(DIR, $utdir . $type2dir{$type});
-    foreach (readdir(DIR)) {
-      if (lc($_) eq lc($pkg)) {
-        $pkgPath = $utdir . $type2dir{$type} . $_;
-      }
-    }
-    
-    #check again
-    unless (-e $pkgPath) {
-      print "Can't repair $pkg: file not found\n";
-      return;
-    }
+    print "Can't repair $pkg: file not found\n";
+    return;
   }
 
   # get the dependencies
@@ -200,51 +191,36 @@ sub repair {
      $opkg->load($pkgPath);
      
   my @deps = $opkg->getDependencies();
-
-  my %installed;
-  # check if the dependencies exist, if not install them, must be case insensitive so get a list of files
-  foreach my $subdir(values %type2dir) {
-    opendir(DIR, $utdir . $subdir) or die "Can't read DIR: $!";
-    map($installed{lc($_)} = "", readdir(DIR));
-    closedir(DIR);
-
-    if (-e $ENV{'HOME'} . "/.loki/ut/" . $subdir) {
-      opendir(DIR, $ENV{'HOME'} . "/.loki/ut/" . $subdir) or die "Can't read DIR: $!";
-      map($installed{lc($_)} = "", readdir(DIR));
-      closedir(DIR);
+  
+  foreach my $dependency (@deps) {
+    if ($dependency =~ m/\.uxx$/i) {
+      print "Ignore $dependency: extension not found\n";
+      next;
     }
-
-    if (-e $ENV{'HOME'} . "/Games/ut/") {
-      opendir(DIR, $ENV{'HOME'} . "/Games/ut/" . $subdir) or die "Can't read DIR: $!";
-      map($installed{lc($_)} = "", readdir(DIR));
-      closedir(DIR);
-    }
-  }
-
-  foreach my $dep(@deps) {
-    next unless ($dep =~ m/\.(u[mxnrat]*)/i);
-    if (!exists($installed{lc($dep)})) {
-      install(undef, $dep);
+    my $path = getPath($dependency);
+    if (!defined($path)) {
+      install(undef, $dependency);
     }
   }
 }
 
 sub update {
   my $ini = uIni->new();
-     $ini->load($utdir . "System/uz-get.ini");
+     $ini->load($utdirs[0] . "System/uz-get.ini");
   my $new_ini = uIni->new();
   my $i = 0;
   my $numFiles = 0;
   while(1) {
     my @files;
     my $repository = $ini->getValue("uz-get.files", "Repository", $i);
-    $new_ini->setValue("uz-get.files", "Repository", $i, $repository);
     unless (defined($repository)) {
       last;
     }
+    $new_ini->setValue("uz-get.files", "Repository[$i]", $repository);
     print "Get $repository\n";
+
     # fetch the page 
-    my $page = get($repository);
+    my $page =  get($repository);
     my $parser = new HTML::LinkExtor (sub {my ($tag, %links) = @_; push(@files, values(%links))});
        $parser->parse ($page);
        $parser->eof;
@@ -255,12 +231,12 @@ sub update {
         $file = $repository . $file;
       }
       # print "Found: $file\n";
-      $new_ini->setValue("uz-get.files", "file", $numFiles, $file);
+      $new_ini->setValue("uz-get.files", "file[$numFiles]", $file);
       $numFiles++;
     }
     $i++;
   }
-  $new_ini->save($utdir . "System/uz-get.ini");
+  $new_ini->save($utdirs[0] . "System/uz-get.ini");
 }
 
 sub fixMismatch {
@@ -345,16 +321,30 @@ sub fixMismatch {
         }
         else {
           print " [REPLACE]\n";
-          unlink($path);
+          my $backup = $utdirs[0] . "Cache/" . $file . "-" . $curguid;
+          move($path, $backup);
           
           print "old: " . $curguid . "\n";
           print "new: " . $guid . "\n";
-          
-          my $link = $redirect . $file;
-          if ($compression) {
-            $link .= ".uz";
+
+          my $cache = $utdirs[0] . "Cache/" . $file . "-" . $guid;
+          if (-e $cache) {
+            print "Move $file Cache\n";
+            move($cache, $path);
           }
-          download(undef, $link);
+          else {            
+            my $cache = getPath($file . ".uz");
+            if (-e $cache) {
+              print "Remove $file.uz from Cache\n";
+              unlink($cache);
+            }
+          
+            my $link = $redirect . $file;
+            if ($compression) {
+              $link .= ".uz";
+            }
+            download(undef, $link);
+          }
         }
       }
     }
@@ -362,37 +352,60 @@ sub fixMismatch {
 }
 
 sub getPath {
+  # case insensitive search for paths of existing files
   my $file = shift;
   
-  # get the filetype
-     $file =~ m/\.(u[mxnrat]*)/i;
-  my $type = lc($1);
+  my $dir = dirname($file);
+  my $filename = basename($file);
   
-  my $pkgPath = $utdir . $type2dir{$type} . $file;
+  my $pkgPath;
+    
+  if ($dir ne ".") {
+    $pkgPath = $file;
+  }
+  else {
+    $pkgPath = makePath($file);
+  }
   
-  
-  unless (-e $pkgPath) {
-    opendir(DIR, $utdir . $type2dir{$type});
-    foreach (readdir(DIR)) {
-      if (lc($_) eq lc($file)) {
-        $pkgPath = $utdir . $type2dir{$type} . $_;
+  foreach my $utdir (@utdirs) {
+    # check if the file exists
+    unless (-e $utdir . $pkgPath) {
+      # no, case insensitive search
+      my $dir = dirname($utdir . $pkgPath);
+      opendir(DIR, $dir);
+      foreach (readdir(DIR)) {
+	if (lc($_) eq lc($filename)) {
+	  $pkgPath = $dir . "/" . $_;
+	}
       }
     }
-    
+    else {
+      $pkgPath = $utdir . $pkgPath;
+    }
     #check again
-    unless (-e $pkgPath) {
-      return;
+    if (-e $pkgPath) {
+      return $pkgPath;
     }
   }
-  return $pkgPath;
+  return undef;
 }
 
 sub makePath {
+  # make the expected path of a file
+  my %type2dir = (
+  "u" => "System/",
+  "unr" => "Maps/",
+  "umx" => "Music/",
+  "utx" => "Textures/",
+  "uax" => "Sounds/",
+  "uz" => "Cache/");
+  
   my $file = shift;
-     $file =~ m/\.(u[mxnrat]*)/i;
+     $file =~ m/\.(u[mxnratz]*$)/i;
+     
   my $type = lc($1);
   
-  my $pkgPath = $utdir . $type2dir{$type} . $file;
+  my $pkgPath = $type2dir{$type} . $file;
   
   return $pkgPath;
 }
