@@ -6,6 +6,7 @@ use File::Copy;
 use File::Basename;
 use Getopt::Long;
 use HTML::LinkExtor;
+use URI::Escape;
 use uIni;
 use upkg;
 use strict;
@@ -28,12 +29,10 @@ use warnings;
 #   - Added multiple direction support
 #   - Changed behaviour of makePath (returns path within utdir)
 #   - Backup mismatched files and restore if available
-#
-# TODO
-#   - check for http errors
-#   - update single repositories
-#   - add an upgrade function?
-#   - incorperate udecache
+# v0.5
+#   - Added support for url-encoding
+#   - Check for http errors when downloading files or getting repository lists
+#   - Use uIni in search and install rather then just open the file
 
 # set some variables
 
@@ -43,7 +42,7 @@ my $pathToUcc = "/home/rork/Games/ut/ucc";
 my $pathToLog = "/home/rork/.loki/ut/System/UnrealTournament.log";
 
 # fixed variables
-my $version = '0.4';
+my $version = '0.5';
 
 
 GetOptions("d|download=s" => \&download, "h|help" => \&help, "r|repair=s" => \&repair, "u|update" => \&update, "s|search=s" => \&search, "i|install=s" => \&install, "f|fix-mismatch" => \&fixMismatch);
@@ -54,6 +53,7 @@ sub download {
   my $file = shift;
   my $filename = $file;
      $filename =~ s/^.*\///;
+     $filename = uri_unescape($filename);
 
   # create the cachename and the packagename
   my $storename = $utdirs[0] . makePath($filename);
@@ -70,7 +70,12 @@ sub download {
 
   unless (-e $storename) {
     print "Downloading $file\n";
-    getstore($file, $storename);
+    my $response = getstore($file, $storename);
+    
+    if (!is_success($response)) {
+      print "Couldn't download $file: $response\n";
+      return;
+    }
   }
   else {
     print "Get $filename from Cache\n";
@@ -101,19 +106,20 @@ sub download {
 sub install {
   my $self = shift;
   my $query = shift;
+     $query = uri_escape($query);
 
   # first find available url's
   my @urls;
 
-  open(FILE, "<", $utdirs[0] . "/System/uz-get.ini") or die "Can't open FILE: $!";
-  while(<FILE>) {
-    if ($_ =~ m/file.*\/$query\.uz/i) {
-      s/[\r\n]//g;
-      s/file\[\d+\]=//i;
-      push(@urls, $_);
+  my $ini = uIni->new();
+     $ini->load($utdirs[0] . "/System/uz-get.ini");
+     
+  foreach (0 .. $ini->getArrayLength("uz-get.files", "file")-1) {
+    my $url = $ini->getValue("uz-get.files", "file", $_);
+    if ($url =~ m/\/$query\.uz$/i) {
+      push(@urls, $url);
     }
   }
-  close(FILE);
   if ($#urls == -1) {
     print "File ($query) not found\n";
     return;
@@ -125,6 +131,7 @@ sub install {
 
   # download file and dependencies
   download(undef, $urls[$rand-1]);
+  $query = uri_unescape($query);
   repair(undef, $query);
 }
 
@@ -150,18 +157,21 @@ HelpText
 sub search {
   my $self = shift;
   my $query = shift;
+     $query = uri_escape($query);
   my %results;
 
-  open(FILE, "<", $utdirs[0] . "/System/uz-get.ini") or die "Can't open FILE uz-get.ini: $!";
-  while(<FILE>) {
-    if ($_ =~ m/\/[^\/]*$query[^\/]*$/i) {
-      $_ =~ s/[\r\n]//g;
-      $_ =~ s/.*\///;
-      $_ =~ s/\.uz$//i;
-      $results{lc($_)}++;
+  my $ini = uIni->new();
+     $ini->load($utdirs[0] . "/System/uz-get.ini");
+    
+  foreach (0 .. $ini->getArrayLength("uz-get.files", "file")-1) {
+    my $url = $ini->getValue("uz-get.files", "file", $_);
+    if ($url =~ m/\/[^\/]*$query[^\/]*$/i) {
+      $url =~ s/[\r\n]//g;
+      $url =~ s/.*\///;
+      $url =~ s/\.uz$//i;
+      $results{uri_unescape($url)}++;
     }
   }
-  close(FILE);
 
   print join("\n", sort keys %results);
   print "\n\n";
@@ -171,9 +181,8 @@ sub repair {
   my $self = shift;
   my $pkg = shift;
 
-
-  $pkg =~ s/\(/\\\(/g;
-  $pkg =~ s/\)/\\\)/g;
+  #$pkg =~ s/\(/\\\(/g;
+  #$pkg =~ s/\)/\\\)/g;
 
   # get the filetype
      $pkg =~ m/\.(u[mxnrat]*)/i;
@@ -181,7 +190,7 @@ sub repair {
 
   # check if the file exists
   my $pkgPath = getPath($pkg);
-  unless (-e $pkgPath) {
+  unless (defined($pkgPath)) {
     print "Can't repair $pkg: file not found\n";
     return;
   }
@@ -221,6 +230,12 @@ sub update {
 
     # fetch the page 
     my $page =  get($repository);
+    
+    if (!defined($page)) {
+      print "Couldn't get $repository\n";
+      $i++;
+      next;
+    }
     my $parser = new HTML::LinkExtor (sub {my ($tag, %links) = @_; push(@files, values(%links))});
        $parser->parse ($page);
        $parser->eof;
@@ -228,7 +243,10 @@ sub update {
       next unless ($file =~ m/.uz$/i);
       if ($file !~ m/^http/i) {
         $file =~ s/^\///;
-        $file = $repository . $file;
+        
+        # unescape to prevent double escaping
+        $file = uri_unescape($file);
+        $file = $repository . uri_escape($file);
       }
       # print "Found: $file\n";
       $new_ini->setValue("uz-get.files", "file[$numFiles]", $file);
@@ -262,6 +280,8 @@ sub fixMismatch {
     if ($line[0] eq "DevNet:" and $line[1] eq "PendingLevel" and $line[3] eq "USES") {
       my $guid = substr($line[4], 5);
       my $file = substr($line[9], 6);
+         $file =~ s/^"//;
+         $file =~ s/"$//;
       $files{$file} = $guid;
     }
     
@@ -287,6 +307,7 @@ sub fixMismatch {
   print "Files: " . (scalar(keys  %files) + 1) . "\n\n";
   
   foreach my $file (sort {lc($a) cmp lc($b)} keys %files) {
+    
     print $file;
     
     
@@ -334,7 +355,7 @@ sub fixMismatch {
           }
           else {            
             my $cache = getPath($file . ".uz");
-            if (-e $cache) {
+            if (defined($cache)) {
               print "Remove $file.uz from Cache\n";
               unlink($cache);
             }
