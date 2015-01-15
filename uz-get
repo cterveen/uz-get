@@ -33,6 +33,8 @@ use warnings;
 #   - Added support for url-encoding
 #   - Check for http errors when downloading files or getting repository lists
 #   - Use uIni in search and install rather then just open the file
+# v0.5.1
+#   - Fixed position of repositories after update
 
 # set some variables
 
@@ -42,7 +44,7 @@ my $pathToUcc = "/home/rork/Games/ut/ucc";
 my $pathToLog = "/home/rork/.loki/ut/System/UnrealTournament.log";
 
 # fixed variables
-my $version = '0.5';
+my $version = '0.5.1';
 
 
 GetOptions("d|download=s" => \&download, "h|help" => \&help, "r|repair=s" => \&repair, "u|update" => \&update, "s|search=s" => \&search, "i|install=s" => \&install, "f|fix-mismatch" => \&fixMismatch);
@@ -233,25 +235,26 @@ sub update {
     
     if (!defined($page)) {
       print "Couldn't get $repository\n";
-      $i++;
-      next;
     }
-    my $parser = new HTML::LinkExtor (sub {my ($tag, %links) = @_; push(@files, values(%links))});
-       $parser->parse ($page);
-       $parser->eof;
-    foreach my $file(@files) {
-      next unless ($file =~ m/.uz$/i);
-      if ($file !~ m/^http/i) {
-        $file =~ s/^\///;
-        
-        # unescape to prevent double escaping
-        $file = uri_unescape($file);
-        $file = $repository . uri_escape($file);
+    else {
+      my $parser = new HTML::LinkExtor (sub {my ($tag, %links) = @_; push(@files, values(%links))});
+	$parser->parse ($page);
+	$parser->eof;
+      foreach my $file(@files) {
+	next unless ($file =~ m/.uz$/i);
+	if ($file !~ m/^http/i) {
+	  $file =~ s/^\///;
+	  
+	  # unescape to prevent double escaping
+	  $file = uri_unescape($file);
+	  $file = $repository . uri_escape($file);
+	}
+	# print "Found: $file\n";
+	$new_ini->setValue("uz-get.files", "file[$numFiles]", $file);
+	$numFiles++;
       }
-      # print "Found: $file\n";
-      $new_ini->setValue("uz-get.files", "file[$numFiles]", $file);
-      $numFiles++;
     }
+    $new_ini->setPosition("uz-get.files", "Repository[$i]", $i);
     $i++;
   }
   $new_ini->save($utdirs[0] . "System/uz-get.ini");
