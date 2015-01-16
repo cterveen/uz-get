@@ -7,6 +7,7 @@ use File::Basename;
 use Getopt::Long;
 use HTML::LinkExtor;
 use URI::Escape;
+use Cwd qw(abs_path);
 use uIni;
 use upkg;
 use strict;
@@ -33,21 +34,123 @@ use warnings;
 #   - Added support for url-encoding
 #   - Check for http errors when downloading files or getting repository lists
 #   - Use uIni in search and install rather then just open the file
-# v0.5.1
+# v0.6
 #   - Fixed position of repositories after update
+#   - Use uz-get.ini for settings, should be in the default system dirs or current directory
+#   - Set working dir to default systemdir (this may or may not fix an issue that may or may not exist on Windows systems)
+#   - Made directory to store configurable, storeId points towards the directory
+#   - Included a cachecleaner, can't determine filetypes
 
-# set some variables
+# set location of uz-get.ini, if left undefined will search for it in current directory or default UT System directories
+my $pathToUzGetIni;
 
-# first dir is where the all the files are stored, this must contain the System/uz-get.ini and must be where ucc stores its files.
-my @utdirs = ("/home/rork/.loki/ut/", "/home/rork/Games/ut/");
-my $pathToUcc = "/home/rork/Games/ut/ucc";
-my $pathToLog = "/home/rork/.loki/ut/System/UnrealTournament.log";
+if (!defined($pathToUzGetIni)) {
+  if (-e $ENV{'HOME'} . "/.loki/ut/System/uz-get.ini") {
+    $pathToUzGetIni = $ENV{'HOME'} . "/.loki/ut/System/uz-get.ini";
+  }
+  elsif (-e dirname(abs_path($0)) . "/uz-get.ini") {
+    $pathToUzGetIni = dirname(abs_path($0)) . "/uz-get.ini";
+  }
+  elsif (-e "C:\\UnrealTournament\\System\\uz-get.ini") {
+    $pathToUzGetIni = "C:\\UnrealTournament\\System\\uz-get.ini";
+  }
+  else {
+    print "uz-get.ini not found, please specify the path in the script\n";
+    exit;
+  }
+}
+
+# load ini and settings
+my $ini = uIni->new();
+   $ini->load($pathToUzGetIni);
+
+my @utdirs;
+foreach (0 .. $ini->getArrayLength("uz-get.config", "utdirs")-1) {
+  my $dir = $ini->getValue("uz-get.config", "utdirs", $_);
+  # check if it is a dir
+  if (!-d $dir) {
+    print "$dir is not a directory\n";
+    next;
+  }
+  if ($dir !~ m/\/$/) {
+    $dir .= "/";
+  }
+  push(@utdirs, $dir);
+}
+
+# checks for existence
+if (!-d $utdirs[0] . "System") {
+  print  $utdirs[0] . "System doesn't exist, please check your configuration\nOn Windows utdirs[0] should be the full path the main directory\nOn linux utdirs[0] should be the full path to ~/.loki/ut/\n";
+  exit;
+}
+
+if (!-d $utdirs[0] . "Cache") {
+  print $utdirs[0] . "Cache doesn't exist, created\n";
+  mkdir($utdirs[0] . "Cache");
+}
+
+my $storeId = $ini->getValue("uz-get.config", "storeId");
+if ($storeId > $ini->getArrayLength("uz-get.config", "utdirs")-1) {
+  print "Directory for storage not found, set to default\n";
+  $storeId = 0;
+}
+my $pathToUcc = $ini->getValue("uz-get.config", "pathToUcc");
+my $pathToLog = $ini->getValue("uz-get.config", "pathToLog");
+
+
 
 # fixed variables
-my $version = '0.5.1';
+my $version = '0.6';
 
+GetOptions("d|download=s" => \&download, "h|help" => \&help, "r|repair=s" => \&repair, "u|update" => \&update, "s|search=s" => \&search, "i|install=s" => \&install, "f|fix-mismatch" => \&fixMismatch, "c|clear-cache" => \&clearCache);
 
-GetOptions("d|download=s" => \&download, "h|help" => \&help, "r|repair=s" => \&repair, "u|update" => \&update, "s|search=s" => \&search, "i|install=s" => \&install, "f|fix-mismatch" => \&fixMismatch);
+sub clearCache {
+ my $pathToCacheini = $utdirs[0] . "Cache/cache.ini";
+ if (!-e $pathToCacheini) {
+   print "cache.ini not found, make sure utdirs[0] is specified correctly\n";
+   return;
+ }
+ 
+ my ($ok, $fail) = (0, 0);
+ my $cini = uIni->new();
+    $cini->load($pathToCacheini);
+ 
+ if (!defined($cini->{ini}->{'Cache'})) {
+   print "No files were found\n";
+   return;
+ }
+ 
+ my $new_cini = uIni->new();
+ my %files = %{$cini->{ini}->{'Cache'}};
+ 
+ foreach my $cachename (keys %files) {
+   my $realname = $files{$cachename};
+   
+   if ($realname =~ m/\.(u[mxnratz]*$)/i) {
+     my $cachepath = $utdirs[0] . "Cache/" . $cachename . ".uxx";
+     my $realpath = getPath($realname);
+     if (!defined($realpath)) {
+       $realpath = $utdirs[$storeId] . makePath($realname);
+     }
+     move($cachepath, $realpath);
+     print "$realname --> $realpath [OK]\n";
+     $ok++;
+   }
+   else {
+     print "$realname --> unknown filetye [SKIP]\n";
+     $new_cini->setValue("Cache", $cachename, $realname);
+     $fail++;
+   }
+ }
+ 
+ if (!$new_cini->isChanged()) {
+   # make an empty header
+   $new_cini->{'ini'}->{'Cache'} = {};
+   $new_cini->{'horder'} = ['Cache'];
+ }
+ $new_cini->save($pathToCacheini);
+ print "\nMoved $ok/" . ($ok + $fail) . " files\n";    
+}
 
 sub download {
   # the most important part of the script, downloads, decompresses and moves the file.
@@ -87,11 +190,14 @@ sub download {
     print "Decompress $storename\n";
     $storename =~ s/\(/\\\(/g;
     $storename =~ s/\)/\\\)/g;
+    
+    # change current working directory to default System, this probably saves the unpacked file in the correct System dir.
+    chdir($utdirs[0] . "System/");
     system($pathToUcc . " decompress " . $storename);
   }
   
-  unless (-e $ENV{'HOME'} . "/.loki/ut/System/" . $filename) {
-    opendir(DIR, $ENV{'HOME'} . "/.loki/ut/System/");
+  unless (-e $utdirs[0] . "System/" . $filename) {
+    opendir(DIR, $utdirs[0] . "System/");
     foreach (readdir(DIR)) {
       if (lc($_) eq lc($filename)) {
         $filename = $_;
@@ -99,7 +205,7 @@ sub download {
     }
   }
   
-  $packagename = $utdirs[0] . makePath($filename);
+  $packagename = $utdirs[$storeId] . makePath($filename);
   
   print "Move to " . $packagename . "\n";
   move($utdirs[0] . "/System/" . $filename ,$packagename) or die "Can't move package (" . $utdirs[0] . "/.loki/ut/System/" . $filename . ": $!";
@@ -112,9 +218,6 @@ sub install {
 
   # first find available url's
   my @urls;
-
-  my $ini = uIni->new();
-     $ini->load($utdirs[0] . "/System/uz-get.ini");
      
   foreach (0 .. $ini->getArrayLength("uz-get.files", "file")-1) {
     my $url = $ini->getValue("uz-get.files", "file", $_);
@@ -152,6 +255,7 @@ Options:
    -s   --search   PACKAGE  Search for the package in the repository
    -u   --update            Update the filelist
    -f   --fix-mismatch      Check the UnrealTournament.log for version mismatches and missing files
+   -c   --clear-cache       Clear the cache, move files to their respective directories
 
 HelpText
 }
@@ -161,9 +265,6 @@ sub search {
   my $query = shift;
      $query = uri_escape($query);
   my %results;
-
-  my $ini = uIni->new();
-     $ini->load($utdirs[0] . "/System/uz-get.ini");
     
   foreach (0 .. $ini->getArrayLength("uz-get.files", "file")-1) {
     my $url = $ini->getValue("uz-get.files", "file", $_);
@@ -216,11 +317,20 @@ sub repair {
 }
 
 sub update {
-  my $ini = uIni->new();
-     $ini->load($utdirs[0] . "System/uz-get.ini");
   my $new_ini = uIni->new();
   my $i = 0;
   my $numFiles = 0;
+  
+  # store settings in new ini
+  for (my $i = 0; $i <= $#utdirs; $i++) {
+    $new_ini->setValue("uz-get.config", "utdirs[$i]", $utdirs[$i]);
+  }
+  
+  $new_ini->setValue("uz-get.config", "pathToUcc", $pathToUcc);
+  $new_ini->setValue("uz-get.config", "pathToLog", $pathToLog);
+  $new_ini->setValue("uz-get.config", "storeId", $storeId);
+  
+  # retrieve each repository and update files
   while(1) {
     my @files;
     my $repository = $ini->getValue("uz-get.files", "Repository", $i);
@@ -257,7 +367,7 @@ sub update {
     $new_ini->setPosition("uz-get.files", "Repository[$i]", $i);
     $i++;
   }
-  $new_ini->save($utdirs[0] . "System/uz-get.ini");
+  $new_ini->save($pathToUzGetIni);
 }
 
 sub fixMismatch {
@@ -274,7 +384,6 @@ sub fixMismatch {
     # Log: Browse: 176.57.143.206/Index.unr?Name=Rork?Class=BotPack.TMale1?team=0?skin=CommandoSkins.daco?Face=CommandoSkins.Boris?Voice=BotPack.VoiceMaleOne?OverrideClass=
     if ($line[0] eq "Log:" and $line[1] eq "Browse:") {
       # reconnect, reset the files
-      print "Switch map\n";
       %files = ();
     }
     
