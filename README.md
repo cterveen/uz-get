@@ -1,26 +1,37 @@
+## Project name
+
 uz-get
-======
 
-uz-get is a script that deals with searching and retrieving Unreal Tournament packages from redirect servers.
+## Description
 
-Usage: uz-get -dhirsuc ?file?  
-Options:  
--d --download URL Downloads and install a networkpackage  
--h --help This help text  
--i --install PACKAGE Searches and downloads a package  
--r --repair PACKAGE Checks for and installs missing dependencies  
--s --search PACKAGE Search for the package in the repository  
--u --update Update the filelist  
--f --fix-mismatch Check the UnrealTournament.log for version mismatches and missing files  
--c --clear-cache Clear the cache, move files to their respective directories
-   
-Requires uIni.pm and upkg.pm which can be found on my github.
+uz-get is a Perl script intended to download packages from Unreal Tournament redirect servers and clear the cache. The script was written as an analog to apt-get and can retrieve files and dependencies from redirect servers for Unreal Tournament servers that have a file list. Additionally it can move packages downloaded from Unreal Tournament servers from the Cache to their respective directories.
 
-Settings
-Settings can be configured in uz-get.ini, this file should be in the default System directory (either ~/.loki/ut/System on linux or C:/UnrealTournament/System on Windows), the same directory as uz-get or specified in the script.
+The script can be considered beta. No documantation is available but a little help text on how to use the script can be displayed. Some options can be configured in an ini.
 
-The following settings are used:
-utdirs[0 .. #] = directories related to UT, should contain the default subdirectories for Maps etc. Specify as many as you want, utdirs[0] should be the default directory.
-pathToUcc = full path to ucc / ucc.exe
-pathToLog = full path where the UnrealTournament log file is stored
-storeId = id of the directory to store files in, matches with utdirs[#]
+The script has been used and seems to perform well. Further development is not intended.
+
+## Installation
+
+Download [upkg](https://github.com/cterveen/upkg) and [uIni](https://github.com/cterveen/uini) and save them in any Perl module directory.
+
+Save all files into a directory.
+
+Configure uz-get.ini with the correct paths for your Unreal Tournament installation and one or more repositories.
+
+## Use
+
+`uz-get -i CTF-2on2-Crates.unr` 
+
+For additional options see  
+`uz-get -h`
+
+## Credits
+
+Depends on:
+
+- upkg https://github.com/cterveen/upkg
+- uIni https://github.com/cterveen/uini
+
+## License
+
+To be decided, but consider it free to use, modify and distribute.
