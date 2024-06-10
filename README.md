@@ -6,9 +6,9 @@ uz-get
 
 uz-get is a Perl script intended to download packages from Unreal Tournament redirect servers and clear the cache. The script was written as an analog to apt-get and can retrieve files and dependencies from redirect servers for Unreal Tournament servers that have a file list. Additionally it can move packages downloaded from Unreal Tournament servers from the Cache to their respective directories.
 
-The script can be considered beta. No documantation is available but a little help text on how to use the script can be displayed. Some options can be configured in an ini.
+The script can be considered beta. The script has been used and seems to perform well. No documantation is available but a little help text on how to use the script can be displayed. Some options can be configured in an ini.
 
-The script has been used and seems to perform well. Further development is not intended.
+No further development is intended.
 
 ## Installation
 
@@ -26,6 +26,8 @@ For additional options see
 `uz-get -h`
 
 ## Credits
+
+Written by Christiaan ter Veen <https://www.rork.nl/>
 
 Depends on:
 
